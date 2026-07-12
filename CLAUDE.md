@@ -44,9 +44,15 @@ clean `main`. If a repo has meaningful uncommitted work (a modified doc, an untr
 often a doc edit someone forgot to commit), `/l-each` stops, reports it, and asks before touching
 anything. Build noise like `.astro/` is ignored; real work is never bulldozed.
 
+## /l-sync — refresh every repo to a clean, up-to-date main
+
+`/l-sync` is the lightweight companion to `/l-each`: no dev task, no commits/merges — it just
+`git checkout main` + `git pull --ff-only` in every discovered wisdom repo. A repo with meaningful
+uncommitted changes is never touched, only reported. See `.claude/skills/l-sync/SKILL.md`.
+
 ## Conventions
 
-- Project-scope skills in this family use an **`l-` prefix** (`l-each`, and `l-translate` /
+- Project-scope skills in this family use an **`l-` prefix** (`l-each`, `l-sync`, and `l-translate` /
   `l-writing` / etc. inside individual wisdom repos). Personal/global tooling skills use other
   prefixes (`dev-*`, `gh-*`, …).
 - File names: kebab-case.
