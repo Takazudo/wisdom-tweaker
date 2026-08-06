@@ -18,6 +18,7 @@ repos/wisdom/
 ├── zudo-cloudflare-wisdom/
 ├── zudo-codemirror-wisdom/
 ├── zudo-css-wisdom/
+├── zudo-slack-wisdom/
 ├── zudo-tauri-wisdom/
 └── zudo-test-wisdom/      ← …and more added over time
 ```
@@ -29,6 +30,20 @@ shared shape is what makes "do X to every one" a sensible operation.
 
 Do not assume the list above is complete or fixed — always discover the current set with
 `.claude/skills/l-each/scripts/discover-repos.sh` (any `*-wisdom` git repo next to wisdom-tweaker).
+
+### The fleet spans two toolchain generations
+
+"Built the same way" stopped meaning "built identically" when zudo-slack-wisdom arrived scaffolded
+on the **next** generation:
+
+| | zfb | zudo-doc | `create-zudo-doc` devDep |
+|---|---|---|---|
+| cloudflare, codemirror, css, tauri, test | `0.1.0-next.99` | `^4.4.13` | `^4.4.13` |
+| **slack** | `2.2.0` | `^5.2.0` | **absent by design** |
+
+The 5.x scaffold treats `create-zudo-doc` as a one-shot `pnpm create zudo-doc` CLI run rather than a
+retained toolchain piece. A new repo is therefore **not** automatically a sixth instance of the same
+thing — check its generation before assuming a canonical script applies to it.
 
 ## /l-each — the one skill that matters here
 
@@ -95,6 +110,30 @@ two (test, cloudflare) did not; css had no copy and inherited the gap when one w
 copying test's. Canonicalizing from the weaker copy meant distributing the worse structure
 family-wide and then "fixing" it back to what half the fleet already had. `check-canonical-sync.sh`
 now makes that divergence visible, but only after the fact — the diff belongs *before* promotion.
+
+The same diff is owed to a **newly added** repo, in reverse: its copy may be ahead of canonical, and
+`check-canonical-sync.sh` reports only "STALE" — a word that quietly asserts canonical is the better
+version. When zudo-slack-wisdom arrived, its `check-pin-parity.mjs` read as stale but actually held
+one improvement canonical lacked (an exact-pin regex, rejecting `^`/`~` on the zfb group, which the
+wrangler-pin gate depends on) and one correct-for-5.x change canonical would have destroyed. Read
+the diff before overwriting; do not treat "STALE" as a verdict about quality.
+
+### Optionality must be keyed on a detected generation, never on absence
+
+Distributing one script to repos of two generations forces the question of what to do when a member
+is legally missing. The cheap answer — *optional: skip it if absent* — is wrong, and the control that
+caught it is worth keeping: with `create-zudo-doc` blanket-optional, a 4.x repo that silently **lost**
+its `create-zudo-doc` pin passed green, indistinguishable from a legitimate 5.x repo. The guard went
+blind on exactly the drift it exists to catch.
+
+So `check-pin-parity.mjs` keys optionality on the zudo-doc **major** read off the one package present
+in every generation: mandatory on 4.x, optional only on 5.x+, and an unparseable pin yields `NaN`,
+which fails every predicate — an unreadable version makes members *more* required, not less. Absence
+still prints a named `SKIPPED` line, per the "a guard that reports nothing must not look like a guard
+that found nothing wrong" rule below.
+
+Generalized: **an exemption must be earned by a positive signal, not granted by a missing one.**
+Absence is what the failure looks like too.
 
 ### Verifying a rendering change across the fleet
 
