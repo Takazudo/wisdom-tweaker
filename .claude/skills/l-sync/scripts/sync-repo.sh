@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
-# Refresh ONE wisdom repo: checkout main + git pull (fast-forward only).
+# Refresh ONE wisdom repo: checkout main + git pull (fast-forward only), then re-bake
+# the repo's doc skill for both assistants (pnpm setup:doc-skill:both).
 # If the repo has meaningful uncommitted changes, do NOT touch it -- report DIRTY instead.
 # Never force-anything: pull is --ff-only, so a diverged main is reported, not clobbered.
 #
+# The bake runs even on an "up to date" pull: it is idempotent and cheap (symlinks +
+# one generated SKILL.md, no build), and it also repairs a manually broken global
+# symlink or a stale category tree the pull state alone can't reveal.
+#
 # Usage: sync-repo.sh <repo-path>
-# Exit:  0 = synced (pulled or already up to date)
+# Exit:  0 = synced (pulled or already up to date), bake OK or legitimately skipped
 #        3 = DIRTY -- skipped, must be reported
 #        4 = pull failed (e.g. diverged / no fast-forward)
 #        5 = checkout main failed
+#        6 = synced, but the doc-skill bake failed -- must be reported
 #        2 = bad argument / not a git repo
 set -euo pipefail
 
@@ -74,5 +80,40 @@ fi
 # problem this skill exists to catch) doesn't slip through as a false "up to date".
 ahead="$(git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
 [ "$ahead" != "0" ] && echo "AHEAD_OF_ORIGIN: $ahead (unpushed commits)"
+
+# Re-bake the doc skill (claude + codex). The generated skill's docs/ is a symlink,
+# so ordinary article edits need no bake -- what goes stale is the SKILL.md scaffold
+# (top-level category tree, tracked-skill links, template changes riding a pull).
+# A repo without the script gets a named SKIP line, never a silent green
+# ("a guard that reports nothing must not look like a guard that found nothing wrong").
+has_bake="$(node -e "
+const s = (require('$repo/package.json').scripts) || {};
+process.stdout.write(s['setup:doc-skill:both'] ? 'yes' : 'no');
+" 2>/dev/null || echo error)"
+
+if [ "$has_bake" = "yes" ]; then
+  if bake_output="$(cd "$repo" && pnpm run --silent setup:doc-skill:both 2>&1)"; then
+    # An exit-0 bake that linked nothing is a failure in disguise -- require the
+    # Global symlink evidence lines before calling it OK.
+    links="$(printf '%s\n' "$bake_output" | grep -c 'Global symlink:' || true)"
+    if [ "$links" -ge 2 ]; then
+      skill_line="$(printf '%s\n' "$bake_output" | grep -m1 "^Done! Skill" || true)"
+      echo "BAKE: OK ($links global symlinks refreshed) ${skill_line}"
+    else
+      echo "BAKE: SUSPECT -- exit 0 but only $links 'Global symlink:' lines (expected 2 for --target both)"
+      printf '%s\n' "$bake_output"
+      exit 6
+    fi
+  else
+    echo "BAKE: FAILED"
+    printf '%s\n' "$bake_output"
+    exit 6
+  fi
+elif [ "$has_bake" = "no" ]; then
+  echo "BAKE: SKIPPED (no setup:doc-skill:both script in package.json)"
+else
+  echo "BAKE: FAILED (could not read package.json scripts)"
+  exit 6
+fi
 
 exit 0

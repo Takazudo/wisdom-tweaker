@@ -104,9 +104,13 @@ anything. Build noise like `.astro/` is ignored; real work is never bulldozed.
 
 ## /l-sync — refresh every repo to a clean, up-to-date main
 
-`/l-sync` is the lightweight companion to `/l-each`: no dev task, no commits/merges — it just
-`git checkout main` + `git pull --ff-only` in every discovered wisdom repo. A repo with meaningful
-uncommitted changes is never touched, only reported. See `.claude/skills/l-sync/SKILL.md`.
+`/l-sync` is the lightweight companion to `/l-each`: no dev task, no commits/merges — it runs
+`git checkout main` + `git pull --ff-only` in every discovered wisdom repo, then re-bakes that
+repo's doc skill for both assistants (`pnpm setup:doc-skill:both`). Ordinary doc edits don't need
+the bake (the generated skill's `docs/` is a symlink into the repo), but the baked SKILL.md
+scaffold — category tree, tracked-skill links, template changes riding a pull — does go stale, so
+every sync refreshes it. A repo with meaningful uncommitted changes is never touched, only
+reported. See `.claude/skills/l-sync/SKILL.md`.
 
 ## shared/ — canonical files distributed to every wisdom repo
 
