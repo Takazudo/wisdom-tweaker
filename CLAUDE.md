@@ -88,7 +88,15 @@ A fourth trap was self-inflicted and is the cheapest to avoid: briefly adding `l
 `pnpm-workspace.yaml`, which would have propagated to four more repos. Diff the files you did not
 intend to edit before committing — `git status` after `pnpm install` is not noise.
 
-## /l-each — the one skill that matters here
+## /l-bump-all — run the complete dependency round
+
+`/l-bump-all` composes the fleet's existing safety and development workflows into the standard
+hands-off first-party dependency round: `/l-sync`, reference-repo reconnaissance, then
+`/l-each /x -m -a /dev-bump-zudo-deps .`, followed by final resolver, provenance, CI, cleanup,
+canonical-script, and doc-skill audits. Cross-fleet regressions found in one repo are propagated to
+the others before the round is declared complete. See `.claude/skills/l-bump-all/SKILL.md`.
+
+## /l-each — the fleet dispatcher
 
 `/l-each <task>` runs the same task across every discovered wisdom repo. See
 `.claude/skills/l-each/SKILL.md`. In short:
@@ -274,9 +282,9 @@ customizations the allowlist exists to record.
 
 ## Conventions
 
-- Project-scope skills in this family use an **`l-` prefix** (`l-each`, `l-sync`, and `l-translate` /
-  `l-writing` / etc. inside individual wisdom repos). Personal/global tooling skills use other
-  prefixes (`dev-*`, `gh-*`, …).
+- Project-scope skills in this family use an **`l-` prefix** (`l-bump-all`, `l-each`, `l-sync`, and
+  `l-translate` / `l-writing` / etc. inside individual wisdom repos). Personal/global tooling
+  skills use other prefixes (`dev-*`, `gh-*`, …).
 - File names: kebab-case.
 - Scripts that operate across repos self-locate relative to wisdom-tweaker and act on siblings —
   they take no hardcoded absolute paths, so the tooling keeps working when the repo set changes.
