@@ -280,6 +280,53 @@ documenting each intentional divergence. Prefer bumping in place and reconciling
 re-scaffolding a site and moving content across — a re-scaffold silently drops the host
 customizations the allowlist exists to record.
 
+### Fixing the false [UNRESOLVED] warning for build-generated nav dirs
+
+`src/content/docs/claude/` is written at build time by the claude-resources integration and is
+gitignored, so on a fresh clone or worktree — before any build has run — the unresolved-nav
+heuristic fired a false `⚠️ [UNRESOLVED] headerNav "/docs/claude"` warning in five of the six repos.
+`run-b4push.sh` runs `check:category-meta` at step 2 and `zfb build` at step 8, deliberately
+cheap-fail-first, so the check always runs before the directory it is looking for exists. That
+ordering is correct and did not change; the check had to become tolerant of the state it always
+runs in, not the other way around.
+
+**The source issue's own suggested fix was not the fleet-wide signal it looked like.** Its option 2
+proposed keying the exemption on `defaultLocaleOnlyPrefixes`. Diffed across all six repos, that list
+omits `/docs/claude/` in four of them (cloudflare, css, slack, test-wisdom) and includes it in two
+(codemirror, tauri) — an artifact of who happened to add the entry, not a signal for "this dir is
+generated". Of the five repos actually affected by the bug, keying on it would have repaired only
+codemirror and tauri and left cloudflare, css, and test-wisdom — the repo the issue was filed from —
+still warning. Another instance of the rule above: diff a signal across every repo before trusting
+it as canonical, especially one an issue hands you pre-labeled "ready-made".
+
+**`.gitignore` is the signal that actually works, but only the copy tracked inside the repo.** A
+first draft probed with plain `git check-ignore -q`, which also matches `.git/info/exclude` and
+`core.excludesFile` — local machine state, never committed anywhere — and `-q` hides which file
+matched, so there would have been no way to even notice a false exemption slipping through. A
+developer's personal global ignore could have silenced this guard fleet-wide. Review caught this
+before implementation shipped it. The fix uses `-v -z` and accepts a match only when its `source`
+basename is `.gitignore` and resolves inside the repo root; every other exit code, source, or
+ambiguity keeps the warning. Same shape as `check-pin-parity.mjs`'s major-version gate two sections
+up: an exemption is earned by a positive signal, never granted by a missing one.
+
+**One trap only implementation surfaced, present in no spec beforehand:** all six repos ignore
+`src/content/docs/claude/` as a directory-only rule, trailing slash included. Probing the same path
+*without* the trailing slash makes git report exit 1 for that rule — file-form and dir-form of an
+otherwise identical pattern don't match the same probe — so the exemption would have silently never
+fired. Covered by the regression harness's case 1.
+
+**Where this goes next:** the durable fix isn't a smarter probe, it's an explicit tracked
+`generatedNavPaths` list in config that states the contract instead of inferring it from
+`.gitignore`. Not built — a direction to pick up later, not a plan in flight.
+
+**Distribution is a separate, still-owed round.** The fix lives only in
+`shared/scripts/check-category-meta.mjs` in this repo. No `*-wisdom` repo runs it yet —
+`scripts/check-canonical-sync.sh` will report all six as `STALE` until an `/l-each` round
+distributes it, and per the "Promoting a file into shared/" section above, "STALE" quietly asserts
+canonical is already the better version. Here it is, but the false warning keeps firing on every
+fresh clone of all five affected repos until that round actually runs. Merging the fix into this
+repo is not the same as fixing the fleet.
+
 ## Conventions
 
 - Project-scope skills in this family use an **`l-` prefix** (`l-bump-all`, `l-each`, `l-sync`, and
