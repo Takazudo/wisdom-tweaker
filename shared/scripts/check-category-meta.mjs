@@ -59,7 +59,9 @@
  * why every part of that probe is as narrow as it is.
  *
  * The exemption is earned by a positive signal and by nothing else: any probe
- * failure, ambiguity, or unrecognized ignore source keeps the warning verbatim.
+ * failure, ambiguity, unrecognized ignore source, or rule merely INHERITED from
+ * an ignored ancestor keeps the warning verbatim — and a probe that could not
+ * run at all says so loudly rather than reporting zero exemptions.
  *
  * Usage: node scripts/check-category-meta.mjs
  * Exit:  0 = OK (warnings allowed), 1 = violations found
@@ -246,11 +248,22 @@ function parseLocales(source) {
  *     Measured gotcha: with `--stdin`, only MATCHING paths appear in the
  *     output, so results must be correlated by the path field — never by line
  *     order against the input list.
+ *   - Probe each target's PARENT too, and refuse the exemption when the parent
+ *     is ignored as well. gitignore rules are inherited downward, so a single
+ *     broad ancestor rule (`docs/`, `content/`, a wholesale-ignored content
+ *     dir) matches every target beneath it — including a genuinely mistyped nav
+ *     path — and would silently turn this whole guard off while still printing
+ *     a plausible `[GENERATED]` note citing a real rule. A rule scoped to the
+ *     generated directory itself leaves the parent unignored; an inherited one
+ *     does not. (Verified: with `docs/` ignored, git reports
+ *     `src/content/docs/typo-nowhere/` AND `src/content/docs/` as ignored.)
  *
  * Exit codes: 0 plus an accepted source is the only path to an exemption. 1
  * (nothing ignored), 128 (not a work tree, bare repo, git absent) and every
  * other outcome keep the warning. A failed probe must make this guard more
- * conservative, never less.
+ * conservative, never less — AND must say so: reporting "probed N dirs" when
+ * git was never consulted is the same manufactured confidence this file's
+ * self-defeat note forbids.
  */
 const GIT_ENV_TO_CLEAR = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"];
 
@@ -300,30 +313,69 @@ function targetDirFor(dir, slug) {
   return `${norm.replace(/\/+$/, "")}/`;
 }
 
-/** Map of probed dir → "source:line" for the dirs an in-repo .gitignore covers. */
+/** Immediate parent of a trailing-slash repo-relative dir, or null at the top. */
+function parentDirOf(dir) {
+  const parent = posix.dirname(dir.replace(/\/+$/, ""));
+  if (!parent || parent === "." || parent === "/" || parent === "..") return null;
+  return `${parent}/`;
+}
+
+/**
+ * Probe result: `{ ran, reason, accepted }`. `accepted` maps probed dir →
+ * "source:line" for the dirs an in-repo .gitignore covers by a rule scoped to
+ * that dir. `ran` is false whenever git could not be consulted at all, so the
+ * caller never reports a probe that did not happen.
+ */
 async function probeGeneratedDirs(dirs) {
   const accepted = new Map();
-  if (dirs.length === 0) return accepted;
-  if (!(await gitTopLevelIsRoot())) return accepted;
-
-  const r = runGit(["check-ignore", "-z", "-v", "--stdin"], dirs.map((d) => `${d}\0`).join(""));
-  if (r.error || r.status !== 0) return accepted;
+  const skipped = (reason) => ({ ran: false, reason, accepted });
+  if (dirs.length === 0) return { ran: true, reason: null, accepted };
+  if (!(await gitTopLevelIsRoot())) {
+    return skipped("git could not answer for this checkout (not a work tree, or its top level is not the repo root)");
+  }
 
   let realRoot;
   try {
     realRoot = await realpath(ROOT);
   } catch {
-    return accepted;
+    return skipped("the repo root could not be resolved");
   }
 
+  // Parents ride along in the same batch so the ancestor test costs no extra spawn.
+  const parents = new Map(dirs.map((d) => [d, parentDirOf(d)]));
+  const probe = [...new Set([...dirs, ...[...parents.values()].filter(Boolean)])];
+
+  const r = runGit(["check-ignore", "-z", "-v", "--stdin"], probe.map((d) => `${d}\0`).join(""));
+  if (r.error) return skipped(`git could not be run (${r.error.message})`);
+  // 0 = something matched, 1 = nothing matched. Anything else (128: bare repo,
+  // git absent) means the answer is unknown, not "not generated".
+  if (r.status !== 0 && r.status !== 1) {
+    return skipped(`git check-ignore exited ${r.status}`);
+  }
+
+  const ignoredAny = new Set();
+  const scoped = new Map();
   const fields = r.stdout.split("\0"); // <source> <linenum> <pattern> <pathname>, repeating
   for (let i = 0; i + 3 < fields.length; i += 4) {
-    const [source, line, , pathname] = fields.slice(i, i + 4);
+    const source = fields[i];
+    const line = fields[i + 1];
+    const pathname = fields[i + 3];
     if (!pathname) continue;
+    ignoredAny.add(pathname);
     if (!isRepoGitignoreSource(source, realRoot)) continue;
-    accepted.set(pathname, `${source}:${line}`);
+    scoped.set(pathname, `${source}:${line}`);
   }
-  return accepted;
+
+  for (const dir of dirs) {
+    const rule = scoped.get(dir);
+    if (!rule) continue;
+    const parent = parents.get(dir);
+    // An ignored parent means the rule is inherited, not scoped to this dir —
+    // it is evidence about the whole subtree, so it is no evidence at all here.
+    if (parent && ignoredAny.has(parent)) continue;
+    accepted.set(dir, rule);
+  }
+  return { ran: true, reason: null, accepted };
 }
 
 const failures = [];
@@ -456,7 +508,7 @@ for (const navPath of navPaths) {
 
 if (unresolved.length > 0) {
   const probed = [...new Set(unresolved.map((u) => u.dir).filter(Boolean))];
-  const generated = await probeGeneratedDirs(probed);
+  const { ran, reason, accepted: generated } = await probeGeneratedDirs(probed);
   let exempted = 0;
 
   for (const u of unresolved) {
@@ -479,11 +531,21 @@ if (unresolved.length > 0) {
     );
   }
 
-  notes.push(
-    `probed ${probed.length} unique target dir(s) for ${unresolved.length} ` +
-      `unresolved nav entr(ies) against in-repo .gitignore rules; ` +
-      `${exempted} exempted as build-generated`,
-  );
+  if (ran) {
+    notes.push(
+      `probed ${probed.length} unique target dir(s) for ${unresolved.length} ` +
+        `unresolved nav entr(ies) against in-repo .gitignore rules; ` +
+        `${exempted} exempted as build-generated`,
+    );
+  } else {
+    // Never phrase a skipped probe as a completed one: "0 exempted" would read
+    // as "git says none of these are generated" when git was never asked.
+    warnings.push(
+      `[PROBE-SKIPPED] did NOT probe ${probed.length} unique target dir(s) for ` +
+        `${unresolved.length} unresolved nav entr(ies) — ${reason}. Every ` +
+        `unresolved entry above is kept as a warning; none was cleared.`,
+    );
+  }
 }
 
 // ── Report ────────────────────────────────────────────────────────────────

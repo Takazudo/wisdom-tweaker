@@ -14,10 +14,10 @@
  * case therefore gets its own copy at <fixture>/scripts/check-category-meta.mjs
  * and runs THAT.
  *
- * ── WHY CASES 3–9 EXIST ───────────────────────────────────────────────────
+ * ── WHY CASES 3–9 AND 12 EXIST ────────────────────────────────────────────
  * Case 1 alone would pass for a script that simply suppressed every warning.
- * Cases 3–9 are the controls: each one is a situation where the exemption must
- * NOT fire, and several carry a precondition assertion proving the fixture
+ * Cases 3–9 and 12 are the controls: each one is a situation where the
+ * exemption must NOT fire, and several carry a precondition assertion proving the fixture
  * really does reproduce the condition being guarded against (e.g. case 8 first
  * confirms the outer repo WOULD answer "ignored", so the surviving warning is
  * attributable to the top-level guard and not to a fixture that never armed).
@@ -208,6 +208,10 @@ test("4. not a git work tree → [UNRESOLVED] (probe failure must not exempt)", 
   const r = runCheck(dir, env);
   assertUnresolved(r, "/docs/claude");
   assertNoGenerated(r);
+  // A probe that never ran must say so — "probed 1 dir(s) … 0 exempted" would
+  // claim git was consulted when it was not.
+  assert(r.err.includes("[PROBE-SKIPPED]"), `expected [PROBE-SKIPPED] warning\n${r.err}`);
+  assert(!r.out.includes("probed 1 unique target dir(s)"), `must not claim a probe that did not run\n${r.out}`);
 });
 
 test("5. ignored only via .git/info/exclude → [UNRESOLVED] (local state is not evidence)", () => {
@@ -306,6 +310,27 @@ test("9. linked git worktree → behaves like its main checkout", () => {
   assert(r.status === 0, `expected exit 0, got ${r.status}\n${r.err}`);
   assertGenerated(r, "/docs/claude");
   assertNoUnresolved(r);
+});
+
+test("12. broad ancestor rule → [UNRESOLVED] (inherited ignore is not evidence)", () => {
+  const env = envFor("case12");
+  const dir = fixture(join(TMP, "case12"));
+  site(dir, ["/docs/overview", "/docs/claude", "/docs/typo-nowhere"]);
+  // `docs/` matches every directory named docs at any depth, so it ignores the
+  // whole content tree — including a genuinely mistyped nav target.
+  write(dir, ".gitignore", "docs/\n");
+  initRepo(dir, env);
+
+  // Precondition: git DOES report both the generated dir and the typo as
+  // ignored, so a surviving warning is the parent test working.
+  assert(git(dir, ["check-ignore", "-q", "--", "src/content/docs/claude/"], env).status === 0, "fixture failed to arm: docs/ did not ignore the target dir");
+  assert(git(dir, ["check-ignore", "-q", "--", "src/content/docs/"], env).status === 0, "fixture failed to arm: docs/ did not ignore the parent dir");
+
+  const r = runCheck(dir, env);
+  assert(r.status === 0, `expected exit 0, got ${r.status}\n${r.err}`);
+  assertUnresolved(r, "/docs/typo-nowhere");
+  assertUnresolved(r, "/docs/claude");
+  assertNoGenerated(r);
 });
 
 test("10. _category_.json sidecar under src/ → [SIDECAR] failure, exit 1", () => {
